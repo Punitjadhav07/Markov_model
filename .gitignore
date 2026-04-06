@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+
+# Large/raw data files
+Data/events.csv
+
+# Streamlit and Python artifacts
+.streamlit/
+*.pyc
