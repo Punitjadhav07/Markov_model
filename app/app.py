@@ -1,119 +1,166 @@
 from pathlib import Path
 
-import altair as alt
+import matplotlib.pyplot as plt
 import pandas as pd
+import seaborn as sns
 import streamlit as st
 
 
-STATE_MAP = {
-    "view": "Browse",
-    "addtocart": "Add_to_Cart",
-    "transaction": "Purchase",
-}
-
-
 @st.cache_data
-def load_and_prepare_data() -> pd.DataFrame:
-    csv_path = Path(__file__).resolve().parents[1] / "Data" / "events.csv"
-    df = pd.read_csv(csv_path, usecols=["visitorid", "timestamp", "event"])
-    df = df[df["event"].isin(["view", "addtocart", "transaction"])].copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-    df = df.sort_values(["visitorid", "timestamp"]).reset_index(drop=True)
-    df["state"] = df["event"].map(STATE_MAP)
-    return df
+def load_transition_matrix() -> pd.DataFrame:
+    app_dir = Path(__file__).resolve().parent
+    pkl_path = app_dir / "transition_probs.pkl"
+    csv_path = app_dir / "transition_probs.csv"
+
+    if pkl_path.exists():
+        return pd.read_pickle(pkl_path)
+    if csv_path.exists():
+        return pd.read_csv(csv_path, index_col=0)
+    return pd.DataFrame()
 
 
-@st.cache_data
-def build_markov_artifacts(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    transitions_df = df[["visitorid", "state"]].copy()
-    transitions_df["to_state"] = transitions_df.groupby("visitorid")["state"].shift(-1).fillna("Exit")
-    transition_counts = pd.crosstab(transitions_df["state"], transitions_df["to_state"])
-    transition_probs = transition_counts.div(transition_counts.sum(axis=1), axis=0)
-    return transitions_df, transition_counts, transition_probs
+def predict_next_state(current_state: str, prob_matrix: pd.DataFrame) -> pd.Series:
+    if current_state not in prob_matrix.index:
+        raise ValueError(
+            f"Unknown state '{current_state}'. Valid states: {list(prob_matrix.index)}"
+        )
+    return prob_matrix.loc[current_state].sort_values(ascending=False)
 
 
 def main() -> None:
-    st.set_page_config(page_title="Customer Behavior Dashboard", layout="wide")
-    st.title("Customer Purchase Behavior Dashboard")
-    st.caption("Markov Chain analysis of customer journeys from browse to purchase.")
+    st.set_page_config(page_title="Customer Behavior Predictor", layout="centered")
 
-    df = load_and_prepare_data()
-    transitions_df, transition_counts, transition_probs = build_markov_artifacts(df)
-
-    total_customers = int(df["visitorid"].nunique())
-    total_events = int(len(df))
-    total_purchases = int((df["event"] == "transaction").sum())
-    customers_with_purchase = int(df.loc[df["event"] == "transaction", "visitorid"].nunique())
-    purchase_customer_rate = (customers_with_purchase / total_customers * 100) if total_customers else 0.0
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Customers", f"{total_customers:,}")
-    c2.metric("Total Events", f"{total_events:,}")
-    c3.metric("Transactions", f"{total_purchases:,}")
-    c4.metric("Customers Who Purchased", f"{purchase_customer_rate:.2f}%")
-
-    left, right = st.columns([1, 1])
-
-    with left:
-        st.subheader("Event Mix")
-        event_mix = (
-            df["event"]
-            .value_counts()
-            .rename_axis("event")
-            .reset_index(name="count")
-            .sort_values("count", ascending=False)
+    transition_probs = load_transition_matrix()
+    if transition_probs.empty:
+        st.error(
+            "Transition matrix not found. Run `notebooks/analysis.ipynb` to generate "
+            "`transition_probs.pkl` (and CSV) in the `app/` folder, then refresh this page."
         )
-        st.bar_chart(event_mix.set_index("event"))
-        st.dataframe(event_mix, use_container_width=True)
+        st.stop()
 
-    with right:
-        st.subheader("Daily Event Trend")
-        daily_events = (
-            df.set_index("timestamp")
-            .resample("D")
-            .size()
-            .rename("events")
-            .reset_index()
+    st.title("Customer Behavior Predictor")
+    st.caption("Next-step probabilities from a first-order Markov model (Retailrocket events).")
+
+    # --- Section 1: Next-State Prediction ---
+    st.subheader("1. Next-State Prediction")
+    state_options = list(transition_probs.index)
+    current_state = st.selectbox("Current state", state_options)
+
+    if st.button("Predict Next State →", type="primary"):
+        probs = predict_next_state(current_state, transition_probs)
+        probs = probs.dropna()
+
+        fig, ax = plt.subplots(figsize=(8, max(3, 0.45 * len(probs))))
+        labels = probs.index.astype(str).tolist()
+        values = probs.values.astype(float)
+        max_idx = int(values.argmax()) if len(values) else -1
+        colors = ["#2171b5" if i == max_idx else "#9ecae9" for i in range(len(values))]
+
+        y_pos = range(len(values))
+        ax.barh(list(y_pos), values, color=colors, edgecolor="white", linewidth=0.5)
+        ax.set_yticks(list(y_pos))
+        ax.set_yticklabels(labels)
+        ax.set_xlabel("Probability")
+        ax.set_xlim(0, max(values) * 1.15 if len(values) else 1)
+        ax.set_title(f"Next states from “{current_state}”")
+
+        for i, v in enumerate(values):
+            ax.text(
+                v + max(values) * 0.01 if len(values) else 0.01,
+                i,
+                f"{v:.3f}",
+                va="center",
+                fontsize=10,
+            )
+
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+
+        out_df = probs.reset_index()
+        out_df.columns = ["Next state", "Probability"]
+        st.dataframe(out_df, use_container_width=True)
+
+        top_state = probs.index[0]
+        if top_state == "Exit":
+            st.info(
+                "Interpretation: the most likely next step is **Exit** — high immediate "
+                "drop-off risk from this state."
+            )
+        elif top_state == "Purchase":
+            st.info(
+                "Interpretation: **Purchase** is most likely next — strong conversion signal "
+                "from this state."
+            )
+        elif top_state == "Browse":
+            st.info(
+                "Interpretation: **Browse** is most likely next — users tend to keep exploring."
+            )
+        elif top_state == "Add_to_Cart":
+            st.info(
+                "Interpretation: **Add_to_Cart** is most likely next — rising purchase intent."
+            )
+        else:
+            st.info(f"Interpretation: **{top_state}** is the most probable next state.")
+
+    st.divider()
+
+    # --- Section 2: Full Heatmap ---
+    st.subheader("2. Full Transition Matrix (heatmap)")
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    sns.heatmap(
+        transition_probs,
+        annot=True,
+        fmt=".3f",
+        cmap="Blues",
+        ax=ax2,
+    )
+    ax2.set_title("Markov Transition Probability Heatmap")
+    plt.tight_layout()
+    st.pyplot(fig2)
+    plt.close(fig2)
+
+    st.divider()
+
+    # --- Section 3: Raw Matrix ---
+    with st.expander("View Raw Transition Matrix"):
+        styled = (
+            transition_probs.style.format("{:.4f}")
+            .background_gradient(cmap="Blues")
         )
-        st.line_chart(daily_events.set_index("timestamp")["events"])
-        st.caption("Shows traffic trend over time across all event types.")
+        st.dataframe(styled, use_container_width=True)
 
-    st.subheader("Transition Probability Heatmap")
-    heatmap_df = (
-        transition_probs.reset_index()
-        .melt(id_vars="state", var_name="to_state", value_name="probability")
-        .rename(columns={"state": "from_state"})
-    )
-    heatmap = (
-        alt.Chart(heatmap_df)
-        .mark_rect()
-        .encode(
-            x=alt.X("to_state:N", title="To State"),
-            y=alt.Y("from_state:N", title="From State"),
-            color=alt.Color("probability:Q", title="Probability", scale=alt.Scale(scheme="blues")),
-            tooltip=[
-                alt.Tooltip("from_state:N", title="From"),
-                alt.Tooltip("to_state:N", title="To"),
-                alt.Tooltip("probability:Q", format=".4f", title="Probability"),
-            ],
+    st.divider()
+
+    # --- Section 4: Funnel Insights ---
+    st.subheader("4. Funnel insights (from matrix)")
+    c1, c2, c3 = st.columns(3)
+
+    p_browse_exit = float(transition_probs.loc["Browse", "Exit"])
+    p_browse_cart = float(transition_probs.loc["Browse", "Add_to_Cart"])
+    p_cart_purchase = float(transition_probs.loc["Add_to_Cart", "Purchase"])
+
+    with c1:
+        st.metric(
+            label="Browse → Exit (drop-off)",
+            value=f"{p_browse_exit * 100:.2f}%",
+            delta=f"{p_browse_exit * 100:.2f}%",
+            delta_color="inverse",
         )
-        .properties(height=280)
-    )
-    st.altair_chart(heatmap, use_container_width=True)
-    st.dataframe(transition_probs.round(4), use_container_width=True)
+    with c2:
+        st.metric(
+            label="Browse → Add_to_Cart (engagement)",
+            value=f"{p_browse_cart * 100:.2f}%",
+            delta=f"{p_browse_cart * 100:.2f}%",
+        )
+    with c3:
+        st.metric(
+            label="Add_to_Cart → Purchase (conversion)",
+            value=f"{p_cart_purchase * 100:.2f}%",
+            delta=f"{p_cart_purchase * 100:.2f}%",
+        )
 
-    st.subheader("Top Transitions by Count")
-    top_transitions = (
-        transitions_df.groupby(["state", "to_state"])
-        .size()
-        .rename("count")
-        .reset_index()
-        .sort_values("count", ascending=False)
-        .head(12)
-    )
-    top_transitions["transition"] = top_transitions["state"] + " → " + top_transitions["to_state"]
-    st.bar_chart(top_transitions.set_index("transition")["count"])
-    st.dataframe(top_transitions[["state", "to_state", "count"]], use_container_width=True)
+    st.caption("Customer Purchase Behavior Analysis — Markov chain on Retailrocket-style events.")
 
 
 if __name__ == "__main__":
