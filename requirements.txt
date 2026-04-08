@@ -3,3 +3,5 @@ numpy>=1.26
 matplotlib>=3.8
 seaborn>=0.13
 streamlit>=1.35
+hmmlearn>=0.3
+scikit-learn>=1.5

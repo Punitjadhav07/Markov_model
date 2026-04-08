@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 import streamlit as st
+import pickle
 
 
 @st.cache_data
@@ -25,6 +26,38 @@ def predict_next_state(current_state: str, prob_matrix: pd.DataFrame) -> pd.Seri
             f"Unknown state '{current_state}'. Valid states: {list(prob_matrix.index)}"
         )
     return prob_matrix.loc[current_state].sort_values(ascending=False)
+
+
+@st.cache_data
+def load_hmm_artifacts() -> dict:
+    """
+    Load optional HMM artifacts saved by `notebooks/hmm_extension.ipynb`.
+    Returns {} if not found.
+    """
+    app_dir = Path(__file__).resolve().parent
+    model_path = app_dir / "hmm_model.pkl"
+    scaler_path = app_dir / "hmm_scaler.pkl"
+    names_path = app_dir / "hmm_hidden_state_names.pkl"
+    mapping_path = app_dir / "hmm_hidden_to_next_action.csv"
+
+    if not (model_path.exists() and scaler_path.exists() and names_path.exists() and mapping_path.exists()):
+        return {}
+
+    with open(model_path, "rb") as f:
+        model = pickle.load(f)
+    with open(scaler_path, "rb") as f:
+        scaler = pickle.load(f)
+    with open(names_path, "rb") as f:
+        hidden_state_names = pickle.load(f)
+    hidden_to_next = pd.read_csv(mapping_path, index_col=0)
+    hidden_to_next.index = hidden_to_next.index.astype(int)
+
+    return {
+        "model": model,
+        "scaler": scaler,
+        "hidden_state_names": hidden_state_names,
+        "hidden_to_next": hidden_to_next,
+    }
 
 
 def main() -> None:
@@ -159,6 +192,35 @@ def main() -> None:
             value=f"{p_cart_purchase * 100:.2f}%",
             delta=f"{p_cart_purchase * 100:.2f}%",
         )
+
+    # --- Optional HMM Extension ---
+    st.divider()
+    st.subheader("5. Hidden Markov Model (HMM) — Intent Layer (optional)")
+    hmm = load_hmm_artifacts()
+    if not hmm:
+        st.warning(
+            "HMM artifacts not found. Run `notebooks/hmm_extension.ipynb` to generate:\n"
+            "- `app/hmm_model.pkl`\n"
+            "- `app/hmm_scaler.pkl`\n"
+            "- `app/hmm_hidden_state_names.pkl`\n"
+            "- `app/hmm_hidden_to_next_action.csv`"
+        )
+    else:
+        st.caption("This section loads a pre-trained HMM and shows intent-aware next-action probabilities.")
+        hidden_to_next = hmm["hidden_to_next"]
+        hidden_names = hmm["hidden_state_names"]
+
+        # Simple intent view: show which hidden state is most associated with Purchase next
+        if "Purchase" in hidden_to_next.columns:
+            purchase_rank = hidden_to_next["Purchase"].sort_values(ascending=False)
+            top_hidden = int(purchase_rank.index[0])
+            st.info(
+                f"Highest purchase-intent hidden state appears to be **{hidden_names[top_hidden]}** "
+                f"(state id {top_hidden})."
+            )
+
+        st.markdown("**Hidden → Next Observable Action (learned from inference)**")
+        st.dataframe(hidden_to_next.round(4), use_container_width=True)
 
     st.caption("Customer Purchase Behavior Analysis — Markov chain on Retailrocket-style events.")
 
