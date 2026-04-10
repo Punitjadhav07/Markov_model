@@ -6,7 +6,7 @@ This project compares:
 
 It is intentionally small and explainable for academic demo use.
 
-## Structure
+## Structure:-
 
 ```text
 customer_prediction/
