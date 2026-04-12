@@ -1,10 +1,8 @@
-# Customer Behavior: Markov vs Hidden Markov (Simplified)
+# Customer Behavior: Markov vs Hidden Markov 
 
 This project compares:
 - **Markov Chain** for observable next-state prediction
 - **Hidden Markov Model (HMM)** for latent intent prediction
-
-It is intentionally small and explainable for academic demo use.
 
 ## Structure:-
 
