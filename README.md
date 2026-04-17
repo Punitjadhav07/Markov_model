@@ -18,7 +18,7 @@ customer_prediction/
 └── README.md
 ```
 
-## Markov baseline
+## Markov baseline:-
 
 From `data/event.csv`:
 1. Map events: `view -> Browse`, `addtocart -> Add_to_Cart`, `transaction -> Purchase`
