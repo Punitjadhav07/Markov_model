@@ -1,4 +1,4 @@
-# Customer Behavior: Markov vs Hidden Markov :-
+# Customer Behavior: Markov vs Hidden Markov 
 
 This project compares:
 - **Markov Chain** for observable next-state prediction
