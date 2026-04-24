@@ -73,9 +73,4 @@ source .venv/bin/activate
 streamlit run app.py
 ```
 
-## Notebooks
 
-```bash
-jupyter notebook notebook/markov.ipynb
-jupyter notebook notebook/hmm.ipynb
-```
